@@ -1,0 +1,262 @@
+import asyncio
+from dataclasses import dataclass
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
+from aiogram.types import Message, CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.context import FSMContext
+
+# =====================
+# НАСТРОЙКИ
+# =====================
+TOKEN = "AAHS1wPcy64u0M4Fq0X_wuRWYo7ZwCfBYOY"
+
+# ВАЖНО: сюда вставь chat_id админ-группы (обычно отрицательный, например -1001234567890)
+ADMIN_CHAT_ID =-1003832178185
+
+BRAND = "WeddingLink"
+CONTACT = "@yourusername"  # твой контакт для связи
+
+# Пока заглушки, позже заменишь реальными демо-ссылками
+EXAMPLES = {
+    "min": "https://example.com/minimal",
+    "bot": "https://example.com/botanical",
+    "par": "https://example.com/party",
+}
+
+# =====================
+# FSM (анкета)
+# =====================
+class LeadForm(StatesGroup):
+    name = State()
+    date = State()
+    city = State()
+    style = State()
+    rsvp = State()
+    contact = State()
+    comment = State()
+
+@dataclass
+class Lead:
+    name: str = ""
+    date: str = ""
+    city: str = ""
+    style: str = ""
+    rsvp: str = ""
+    contact: str = ""
+    comment: str = ""
+
+def safe_style_name(code: str) -> str:
+    return {"min": "Минимализм", "bot": "Ботаника", "par": "Party"}.get(code, code)
+
+def kb_main():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🎨 Выбрать стиль (примеры)", callback_data="style_menu")
+    kb.button(text="📌 Что входит", callback_data="features")
+    kb.button(text="📝 Оставить заявку", callback_data="lead_start")
+    kb.adjust(1, 1, 1)
+    return kb.as_markup()
+
+def kb_styles(back: bool = True):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✨ Минимализм", callback_data="style:min")
+    kb.button(text="🌿 Ботаника", callback_data="style:bot")
+    kb.button(text="🎉 Party", callback_data="style:par")
+    if back:
+        kb.button(text="← Назад", callback_data="back_main")
+        kb.adjust(1, 1, 1, 1)
+    else:
+        kb.adjust(1, 1, 1)
+    return kb.as_markup()
+
+def kb_yesno(prefix: str):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Да", callback_data=f"{prefix}:yes")
+    kb.button(text="Нет", callback_data=f"{prefix}:no")
+    kb.adjust(2)
+    return kb.as_markup()
+
+def kb_after_example():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 Оставить заявку", callback_data="lead_start")
+    kb.button(text="← Другие стили", callback_data="style_menu")
+    kb.adjust(1, 1)
+    return kb.as_markup()
+
+def features_text() -> str:
+    return (
+        "📌 **Что входит в свадебный сайт-приглашение**\n\n"
+        "• Дата и таймер до свадьбы\n"
+        "• Карта и маршрут\n"
+        "• Программа дня\n"
+        "• Дресс-код / подарки / FAQ (по желанию)\n"
+        "• 💌 RSVP (гости подтверждают участие)\n\n"
+        "Чтобы увидеть примеры — нажмите **«🎨 Выбрать стиль»**.\n"
+        "Чтобы рассчитать стоимость — оставьте заявку: **«📝 Оставить заявку»**."
+    )
+
+def pricing_after_lead_text() -> str:
+    # Цены только после заявки — ориентиры + следующий шаг
+    return (
+        "💬 **Спасибо! Я получила вашу заявку.**\n\n"
+        "Ориентиры по пакетам (точную цену подтвержу по деталям):\n"
+        "• **Базовый** — сайт (дата/карта/программа)\n"
+        "• **Стандарт** — + таймер + RSVP\n"
+        "• **Премиум** — индивидуальный дизайн + расширенные блоки\n\n"
+        f"Если хотите быстрее — напишите мне напрямую: {CONTACT}"
+    )
+
+async def main():
+    bot = Bot(TOKEN, parse_mode="Markdown")
+    dp = Dispatcher()
+
+    # ===== /start =====
+    @dp.message(CommandStart())
+    async def start(msg: Message):
+        text = (
+            f"💍 **{BRAND} — свадебные сайты-приглашения**\n\n"
+            "Одна красивая ссылка для гостей:\n"
+            "⏰ таймер • 📍 карта • 📋 программа • 💌 RSVP\n\n"
+            "Выберите действие 👇"
+        )
+        await msg.answer(text, reply_markup=kb_main())
+
+    # ===== Главное меню =====
+    @dp.callback_query(F.data == "back_main")
+    async def back_main(cq: CallbackQuery):
+        await cq.message.edit_text(
+            f"💍 **{BRAND}**\n\nВыберите действие 👇",
+            reply_markup=kb_main()
+        )
+        await cq.answer()
+
+    # ===== Стиль меню =====
+    @dp.callback_query(F.data == "style_menu")
+    async def style_menu(cq: CallbackQuery):
+        await cq.message.edit_text(
+            "🎨 **Выберите стиль** — покажу пример:",
+            reply_markup=kb_styles()
+        )
+        await cq.answer()
+
+    @dp.callback_query(F.data.startswith("style:"))
+    async def show_style(cq: CallbackQuery):
+        code = cq.data.split(":")[1]
+        link = EXAMPLES.get(code, "https://example.com")
+        await cq.message.edit_text(
+            f"✅ **{safe_style_name(code)}**\n"
+            f"Пример: {link}\n\n"
+            "Если хотите такой сайт — оставьте заявку, и я рассчитаю стоимость после деталей.",
+            reply_markup=kb_after_example()
+        )
+        await cq.answer()
+
+    # ===== Фичи =====
+    @dp.callback_query(F.data == "features")
+    async def features(cq: CallbackQuery):
+        await cq.message.edit_text(features_text(), reply_markup=kb_main())
+        await cq.answer()
+
+    # ===== ЛИД-ФОРМА =====
+    @dp.callback_query(F.data == "lead_start")
+    async def lead_start(cq: CallbackQuery, state: FSMContext):
+        await state.set_state(LeadForm.name)
+        await state.update_data(lead=Lead().__dict__)
+        await cq.message.edit_text(
+            "📝 Давайте быстро уточним детали (1–2 минуты).\n\n"
+            "1/7 Как вас зовут? (имя/пара)"
+        )
+        await cq.answer()
+
+    @dp.message(LeadForm.name)
+    async def lead_name(msg: Message, state: FSMContext):
+        data = await state.get_data()
+        lead = data["lead"]
+        lead["name"] = msg.text.strip()
+        await state.update_data(lead=lead)
+        await state.set_state(LeadForm.date)
+        await msg.answer("2/7 Дата свадьбы? (можно примерно)")
+
+    @dp.message(LeadForm.date)
+    async def lead_date(msg: Message, state: FSMContext):
+        data = await state.get_data()
+        lead = data["lead"]
+        lead["date"] = msg.text.strip()
+        await state.update_data(lead=lead)
+        await state.set_state(LeadForm.city)
+        await msg.answer("3/7 В каком городе/стране свадьба?")
+
+    @dp.message(LeadForm.city)
+    async def lead_city(msg: Message, state: FSMContext):
+        data = await state.get_data()
+        lead = data["lead"]
+        lead["city"] = msg.text.strip()
+        await state.update_data(lead=lead)
+        await state.set_state(LeadForm.style)
+        await msg.answer("4/7 Какой стиль вам ближе?", reply_markup=kb_styles(back=False))
+
+    @dp.callback_query(LeadForm.style, F.data.startswith("style:"))
+    async def lead_style(cq: CallbackQuery, state: FSMContext):
+        code = cq.data.split(":")[1]
+        data = await state.get_data()
+        lead = data["lead"]
+        lead["style"] = safe_style_name(code)
+        await state.update_data(lead=lead)
+        await state.set_state(LeadForm.rsvp)
+        await cq.message.edit_text("5/7 Нужна кнопка RSVP (подтверждение гостей)?", reply_markup=kb_yesno("rsvp"))
+        await cq.answer()
+
+    @dp.callback_query(LeadForm.rsvp, F.data.startswith("rsvp:"))
+    async def lead_rsvp(cq: CallbackQuery, state: FSMContext):
+        ans = cq.data.split(":")[1]
+        data = await state.get_data()
+        lead = data["lead"]
+        lead["rsvp"] = "Да" if ans == "yes" else "Нет"
+        await state.update_data(lead=lead)
+        await state.set_state(LeadForm.contact)
+        await cq.message.edit_text("6/7 Оставьте контакт (телефон или @ник), чтобы я могла ответить.")
+        await cq.answer()
+
+    @dp.message(LeadForm.contact)
+    async def lead_contact(msg: Message, state: FSMContext):
+        data = await state.get_data()
+        lead = data["lead"]
+        lead["contact"] = msg.text.strip()
+        await state.update_data(lead=lead)
+        await state.set_state(LeadForm.comment)
+        await msg.answer("7/7 Комментарий (пожелания, дедлайн, важные детали). Можно «нет».")
+
+    @dp.message(LeadForm.comment)
+    async def lead_comment(msg: Message, state: FSMContext, bot: Bot):
+        data = await state.get_data()
+        lead = data["lead"]
+        lead["comment"] = msg.text.strip()
+        await state.clear()
+
+        # Сообщение в админ-чат
+        admin_text = (
+            "🆕 **Заявка на свадебный сайт**\n\n"
+            f"👤 Имя/пара: {lead['name']}\n"
+            f"📅 Дата: {lead['date']}\n"
+            f"📍 Город: {lead['city']}\n"
+            f"🎨 Стиль: {lead['style']}\n"
+            f"💌 RSVP: {lead['rsvp']}\n"
+            f"📞 Контакт: {lead['contact']}\n"
+            f"📝 Комментарий: {lead['comment']}\n"
+            f"👁 Профиль: @{msg.from_user.username}" if msg.from_user.username else "👁 Профиль: (username нет)"
+        )
+        await bot.send_message(ADMIN_CHAT_ID, admin_text)
+
+        # Ответ клиенту + цены после заявки
+        await msg.answer(
+            "✅ Спасибо! Заявка принята.\n"
+            "Я напишу вам с примерами и точной стоимостью.\n\n"
+            + pricing_after_lead_text()
+        )
+
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
